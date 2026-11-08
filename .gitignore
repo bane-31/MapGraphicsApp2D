@@ -74,3 +74,7 @@ Debug/
 Release/
 *.suo
 *.user
+
+# Ignoriši NuGet i lokalne pakete
+packages/
+**/packages/*
