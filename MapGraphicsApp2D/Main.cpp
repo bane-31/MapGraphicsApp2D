@@ -14,6 +14,8 @@
 #pragma comment(lib, "winmm.lib")
 
 #include "stb_image.h"
+#include <cstdio>
+
 
 
 
@@ -21,6 +23,8 @@ int imgW, imgH, imgComp;
 
 const double TARGET_FPS = 75.0;
 const double FRAME_TIME = 1.0 / TARGET_FPS;
+
+const float METERS_PER_PIXEL = 3.3f;
 
 int endProgram(std::string message) {
     std::cout << message << std::endl;
@@ -95,9 +99,11 @@ int main()
 
     unsigned int mapBcg;
     unsigned int pin;
+    unsigned int digits;
 
     preprocessTexture(mapBcg, "res/map_bcg3.jpg");
     preprocessTexture(pin, "res/pin1.png");
+    preprocessTexture(digits, "res/digits.png");
 
     //map
     float vertices[] = {
@@ -158,7 +164,7 @@ int main()
 
 
     double lastFrame = glfwGetTime();
-    const float panSpeed = 0.3f;
+    const float panSpeed = 0.1f;
 
     float visibleArea = 0.1f;
     float mapX = 0.5f, mapY = 0.5f;
@@ -168,11 +174,52 @@ int main()
 
     float rS, rT;
     computeMapView(fbw, fbh, visibleArea, rS, rT);
+
+
+    ////razdaljina (atlas sa ciframa "0123456789.m")
+
+    const int ATLAS_CHARS = 12;
+    const int MAX_CHARS = 10;
+    const float charH = 0.08f;
+    const float charW = charH * (56.0f / 80.0f) * ((float)fbh / fbw);
+    const float startX = -0.97f, startY = 0.95f;
+
+    float digitVertices[MAX_CHARS * 16];
+    for (int i = 0; i < MAX_CHARS; i++) {
+        float x0 = startX + i * charW, x1 = x0 + charW;
+        float y0 = startY - charH, y1 = startY;
+        float quad[16] = {
+            x0, y1,  0.0f, 1.0f,
+            x0, y0,  0.0f, 0.0f,
+            x1, y0,  1.0f, 0.0f,
+            x1, y1,  1.0f, 1.0f,
+        };
+        for (int j = 0; j < 16; j++) digitVertices[i * 16 + j] = quad[j];
+    }
+    unsigned int digitVAO;
+    unsigned int digitVBO;
+    glGenVertexArrays(1, &digitVAO);
+    glGenBuffers(1, &digitVBO);
+
+    glBindVertexArray(digitVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, digitVBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(digitVertices), digitVertices, GL_STATIC_DRAW);
+
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+
+    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
+    glEnableVertexAttribArray(2);
+
+    float distance = 0.0f;
+    char distanceText[32];
     while (!glfwWindowShouldClose(window))
     {
         double frameStart = glfwGetTime();
         float dt = (float)(frameStart - lastFrame);
         lastFrame = frameStart;
+
+        float prevX = mapX, prevY = mapY;
 
         if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) mapY += panSpeed * dt;
         if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) mapY -= panSpeed * dt;
@@ -183,6 +230,11 @@ int main()
 
         mapX = max(rS / 2, min(mapX, 1.0f - rS / 2));
         mapY = max(rT / 2, min(mapY, 1.0f - rT / 2));
+
+        //predjena razdaljina (racuna se posle ogranicenja, pa se ne broji guranje u ivicu)
+        float dxPx = (mapX - prevX) * imgW;
+        float dyPx = (mapY - prevY) * imgH;
+        distance += sqrt(dxPx * dxPx + dyPx * dyPx) * METERS_PER_PIXEL;
 
 
         glClear(GL_COLOR_BUFFER_BIT);
@@ -204,6 +256,24 @@ int main()
         
         glBindVertexArray(pinVAO);
         glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+
+
+        //razdaljina
+        snprintf(distanceText, sizeof(distanceText), "%.1f m", distance);
+        glBindTexture(GL_TEXTURE_2D, digits);
+        glBindVertexArray(digitVAO);
+        for (int i = 0; i < MAX_CHARS && distanceText[i] != '\0'; i++) {
+            char c = distanceText[i];
+            int idx;
+            if (c >= '0' && c <= '9') idx = c - '0';
+            else if (c == '.') idx = 10;
+            else if (c == 'm') idx = 11;
+            else continue; // razmak - samo preskoci mesto
+
+            glUniform2f(glGetUniformLocation(basicShader, "uCenter"), (idx + 0.5f) / ATLAS_CHARS, 0.5f);
+            glUniform2f(glGetUniformLocation(basicShader, "uRange"), 1.0f / ATLAS_CHARS, 1.0f);
+            glDrawArrays(GL_TRIANGLE_FAN, i * 4, 4);
+        }
 
 
 
