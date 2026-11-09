@@ -13,7 +13,11 @@
 #include <mmsystem.h>
 #pragma comment(lib, "winmm.lib")
 
+#include "stb_image.h"
 
+
+
+int imgW, imgH, imgComp;
 
 const double TARGET_FPS = 75.0;
 const double FRAME_TIME = 1.0 / TARGET_FPS;
@@ -24,7 +28,7 @@ int endProgram(std::string message) {
     return -1;
 }
 
-
+float mapX = 0.0f, mapY = 0.0f;
 
 
 void keyboardCallback(GLFWwindow* window, int key, int scancode, int action, int mods) {
@@ -49,8 +53,19 @@ void preprocessTexture(unsigned& texture, const char* filepath) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 }
 
+void computeMapView(int screenW, int screenH, float area, float& rS, float& rT) {
+    //rS*W / rT*H = Ws / Hs
+    // eq. to rS / rT = Ws / Hs * (H / W)
+    float k = ((float)screenW / screenH) * ((float)imgH / imgW);
+    rT = sqrt(area / k);
+    rS = k * rT;
+    if (rS > 1.0f) { rS = 1.0f; rT = rS / k; }
+    if (rT > 1.0f) { rT = 1.0f; rS = k * rT; }
+}
+
 int main()
 {
+    stbi_info("res/map_bcg3.jpg", &imgW, &imgH, &imgComp);
     timeBeginPeriod(1);
 
     glfwInit();
@@ -75,22 +90,22 @@ int main()
 
     unsigned int basicShader = createShader("basic.vert", "basic.frag");
     glUseProgram(basicShader);
-    glUniform1i(glGetUniformLocation(basicShader, "uTex0"), 0);
+    glUniform1i(glGetUniformLocation(basicShader, "uTex"), 0);
 
 
     unsigned int mapBcg;
     unsigned int pin;
 
     preprocessTexture(mapBcg, "res/map_bcg3.jpg");
-    preprocessTexture(pin, "res/pin.png");
+    preprocessTexture(pin, "res/pin1.png");
 
     //map
     float vertices[] = {
-        //   x      y       s     t
-           -1.0f,  1.0f,   0.0f, 0.5f,
-           -1.0f, -1.0f,   0.0f, 0.0f,
-            1.0f, -1.0f,   0.5f, 0.0f,
-            1.0f,  1.0f,   0.5f, 0.5f,
+        //   x      y     s     t
+           -1.0f,  1.0f,  0.0f, 1.0f,
+           -1.0f, -1.0f,  0.0f, 0.0f,
+            1.0f, -1.0f,  1.0f, 0.0f,
+            1.0f,  1.0f,  1.0f, 1.0f,
     };
     unsigned int VAO;
     unsigned int VBO;
@@ -112,10 +127,10 @@ int main()
 
     float pinVertices[] = {
         //   x      y       s     t
-           -1.0f,  1.0f,   0.0f, 0.0f,
-           -1.0f, -1.0f,   0.0f, 0.0f,
-            1.0f, -1.0f,   0.5f, 0.0f,
-            1.0f,  1.0f,   0.5f, 0.5f,
+           -0.03f,  0.045f,   0.0f, 1.0f,
+           -0.03f, -0.045f,   0.0f, 0.0f,
+            0.03f, -0.045f,   1.0f, 0.0f,
+            0.03f,  0.045f,   1.0f, 1.0f,
     };
     unsigned int pinVAO;
     unsigned int pinVBO;
@@ -141,16 +156,53 @@ int main()
     double fpsTimer = glfwGetTime();
     int frameCount = 0;
 
+
+    double lastFrame = glfwGetTime();
+    const float panSpeed = 0.3f;
+
+    float visibleArea = 0.1f;
+    float mapX = 0.5f, mapY = 0.5f;
+
+    int fbw, fbh;
+    glfwGetFramebufferSize(window, &fbw, &fbh);
+
+    float rS, rT;
+    computeMapView(fbw, fbh, visibleArea, rS, rT);
     while (!glfwWindowShouldClose(window))
     {
         double frameStart = glfwGetTime();
+        float dt = (float)(frameStart - lastFrame);
+        lastFrame = frameStart;
+
+        if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) mapY += panSpeed * dt;
+        if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) mapY -= panSpeed * dt;
+        if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) mapX += panSpeed * dt;
+        if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) mapX -= panSpeed * dt;
+
+        
+
+        mapX = max(rS / 2, min(mapX, 1.0f - rS / 2));
+        mapY = max(rT / 2, min(mapY, 1.0f - rT / 2));
+
 
         glClear(GL_COLOR_BUFFER_BIT);
         glUseProgram(basicShader);
 
+        //map
+        glUniform2f(glGetUniformLocation(basicShader, "uCenter"), mapX, mapY);
+        glUniform2f(glGetUniformLocation(basicShader, "uRange"), rS, rT);
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, mapBcg);
         glBindVertexArray(VAO);
+        glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+
+        //pin
+        glUniform2f(glGetUniformLocation(basicShader, "uCenter"), 0.5f, 0.5f);
+        glUniform2f(glGetUniformLocation(basicShader, "uRange"), 1.0f, 1.0f);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, pin);
+        
+        glBindVertexArray(pinVAO);
         glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
 
 
