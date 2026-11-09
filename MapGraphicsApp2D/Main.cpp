@@ -26,6 +26,18 @@ const double FRAME_TIME = 1.0 / TARGET_FPS;
 
 const float METERS_PER_PIXEL = 3.3f;
 
+bool measureMode = false;
+
+const int MAX_DOTS = 100;
+float dotVertices[MAX_DOTS * 16] = {};
+float lineVertices[MAX_DOTS * 16] = {};
+float dotPos[MAX_DOTS * 2] = {};
+int numOfDots = 0;
+bool dotsChanged = false;
+float measuredDistance = 0.0f;
+
+const float iconX0 = 0.88f, iconX1 = 0.98f, iconY0 = 0.78f, iconY1 = 0.96f;
+
 int endProgram(std::string message) {
     std::cout << message << std::endl;
     glfwTerminate();
@@ -39,6 +51,54 @@ void keyboardCallback(GLFWwindow* window, int key, int scancode, int action, int
 
     if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
         glfwSetWindowShouldClose(window, GLFW_TRUE);
+    }
+
+
+    if (key == GLFW_KEY_R && action == GLFW_PRESS) {
+        measureMode = measureMode ? false : true;
+    }
+}
+
+void mouseCallback(GLFWwindow* window, int button, int action, int mods) {
+    if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
+
+        double xpos, ypos;
+        glfwGetCursorPos(window, &xpos, &ypos);
+
+        int winW, winH;
+        glfwGetWindowSize(window, &winW, &winH);
+
+        float x = (float)(xpos / winW * 2.0 - 1.0);
+        float y = (float)(1.0 - ypos / winH * 2.0);
+
+        if (!measureMode) {
+            if (x >= iconX0 && x <= iconX1 && y >= iconY0 && y <= iconY1)
+                measureMode = true;
+            return;
+        }
+
+        if (numOfDots >= MAX_DOTS) return;
+
+        float dh = 0.012f, dw = dh * winH / winW;
+        float dot[16] = {
+        x - dw, y + dh,  0.0f, 1.0f,
+        x - dw, y - dh,  0.0f, 0.0f,
+        x + dw, y - dh,  1.0f, 0.0f,
+        x + dw, y + dh,  1.0f, 1.0f,
+        };
+        for (int j = 0; j < 16; j++) dotVertices[numOfDots * 16 + j] = dot[j];
+
+
+        if (numOfDots > 0) {
+            float dxPx = (x - dotPos[(numOfDots - 1) * 2]) / 2.0f * imgW;
+            float dyPx = (y - dotPos[(numOfDots - 1) * 2 + 1]) / 2.0f * imgH;
+            measuredDistance += sqrt(dxPx * dxPx + dyPx * dyPx) * METERS_PER_PIXEL;
+        }
+
+        dotPos[numOfDots * 2] = x;
+        dotPos[numOfDots * 2 + 1] = y;
+        numOfDots += 1;
+        dotsChanged = true;
     }
 }
 
@@ -87,6 +147,7 @@ int main()
 
 
     glfwSetKeyCallback(window, keyboardCallback);
+    glfwSetMouseButtonCallback(window, mouseCallback);
 
 
     if (glewInit() != GLEW_OK) return endProgram("GLEW nije uspeo da se inicijalizuje.");
@@ -95,15 +156,23 @@ int main()
     unsigned int basicShader = createShader("basic.vert", "basic.frag");
     glUseProgram(basicShader);
     glUniform1i(glGetUniformLocation(basicShader, "uTex"), 0);
+    glUniform1i(glGetUniformLocation(basicShader, "uUseTex"), 1);
+    glUniform1i(glGetUniformLocation(basicShader, "uUseCol"), 0);
 
 
     unsigned int mapBcg;
     unsigned int pin;
     unsigned int digits;
+    unsigned int dot;
+    unsigned int walkIcon;
+    unsigned int student;
 
     preprocessTexture(mapBcg, "res/map_bcg3.jpg");
     preprocessTexture(pin, "res/pin1.png");
     preprocessTexture(digits, "res/digits.png");
+    preprocessTexture(dot, "res/dot.png");
+    preprocessTexture(walkIcon, "res/walk.png");
+    preprocessTexture(student, "res/student.png");
 
     //map
     float vertices[] = {
@@ -213,53 +282,96 @@ int main()
 
     float distance = 0.0f;
     char distanceText[32];
-    while (!glfwWindowShouldClose(window))
-    {
-        double frameStart = glfwGetTime();
-        float dt = (float)(frameStart - lastFrame);
-        lastFrame = frameStart;
+    float prevX = 0.0, prevY = 0.0;
 
-        float prevX = mapX, prevY = mapY;
+    //dot
+    unsigned int dotVAO;
+    unsigned int dotVBO;
+    glGenVertexArrays(1, &dotVAO);
+    glGenBuffers(1, &dotVBO);
 
-        if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) mapY += panSpeed * dt;
-        if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) mapY -= panSpeed * dt;
-        if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) mapX += panSpeed * dt;
-        if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) mapX -= panSpeed * dt;
+    glBindVertexArray(dotVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, dotVBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(dotVertices), dotVertices, GL_DYNAMIC_DRAW);
 
-        
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
 
-        mapX = max(rS / 2, min(mapX, 1.0f - rS / 2));
-        mapY = max(rT / 2, min(mapY, 1.0f - rT / 2));
+    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
+    glEnableVertexAttribArray(2);
 
-        //predjena razdaljina (racuna se posle ogranicenja, pa se ne broji guranje u ivicu)
-        float dxPx = (mapX - prevX) * imgW;
-        float dyPx = (mapY - prevY) * imgH;
-        distance += sqrt(dxPx * dxPx + dyPx * dyPx) * METERS_PER_PIXEL;
+    ////duzi - koriste iste cvorove (centre tacaka iz dotPos), crtaju se kao GL_LINE_STRIP
 
+    unsigned int lineVAO;
+    unsigned int lineVBO;
+    glGenVertexArrays(1, &lineVAO);
+    glGenBuffers(1, &lineVBO);
 
-        glClear(GL_COLOR_BUFFER_BIT);
-        glUseProgram(basicShader);
+    glBindVertexArray(lineVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, lineVBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(dotPos), dotPos, GL_DYNAMIC_DRAW);
 
-        //map
-        glUniform2f(glGetUniformLocation(basicShader, "uCenter"), mapX, mapY);
-        glUniform2f(glGetUniformLocation(basicShader, "uRange"), rS, rT);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+    // atribut 1 (boja) nije niz: kada je iskljucen, uzima se jedna vrednost za sva temena (glVertexAttrib4f)
+
+    glLineWidth(2.0f); // na nekim drajverima u core profilu radi samo debljina 1
+
+    ////ime, prezime i indeks (donji levi ugao, providnost se zadaje kroz rgba temena)
+
+    const float studentH = 0.12f;
+    const float studentW = studentH * (560.0f / 100.0f) * ((float)fbh / fbw);
+    float studentVertices[] = {
+        //   x                   y                   r     g     b     a      s     t
+        -0.98f,            -0.98f + studentH,  1.0f, 1.0f, 1.0f, 0.5f,  0.0f, 1.0f,
+        -0.98f,            -0.98f,             1.0f, 1.0f, 1.0f, 0.5f,  0.0f, 0.0f,
+        -0.98f + studentW, -0.98f,             1.0f, 1.0f, 1.0f, 0.5f,  1.0f, 0.0f,
+        -0.98f + studentW, -0.98f + studentH,  1.0f, 1.0f, 1.0f, 0.5f,  1.0f, 1.0f,
+    };
+    unsigned int studentVAO;
+    unsigned int studentVBO;
+    glGenVertexArrays(1, &studentVAO);
+    glGenBuffers(1, &studentVBO);
+
+    glBindVertexArray(studentVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, studentVBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(studentVertices), studentVertices, GL_STATIC_DRAW);
+
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+
+    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(2 * sizeof(float)));
+    glEnableVertexAttribArray(1);
+
+    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(6 * sizeof(float)));
+    glEnableVertexAttribArray(2);
+
+    ////oznaka rezima hodanja
+
+    float iconVertices[] = {
+        iconX0, iconY1,  0.0f, 1.0f,
+        iconX0, iconY0,  0.0f, 0.0f,
+        iconX1, iconY0,  1.0f, 0.0f,
+        iconX1, iconY1,  1.0f, 1.0f,
+    };
+    unsigned int iconVAO;
+    unsigned int iconVBO;
+    glGenVertexArrays(1, &iconVAO);
+    glGenBuffers(1, &iconVBO);
+
+    glBindVertexArray(iconVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, iconVBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(iconVertices), iconVertices, GL_STATIC_DRAW);
+
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+
+    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
+    glEnableVertexAttribArray(2);
+
+    auto drawDistance = [&](float value) {
+        snprintf(distanceText, sizeof(distanceText), "%.1f m", value);
         glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, mapBcg);
-        glBindVertexArray(VAO);
-        glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
-
-        //pin
-        glUniform2f(glGetUniformLocation(basicShader, "uCenter"), 0.5f, 0.5f);
-        glUniform2f(glGetUniformLocation(basicShader, "uRange"), 1.0f, 1.0f);
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, pin);
-        
-        glBindVertexArray(pinVAO);
-        glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
-
-
-        //razdaljina
-        snprintf(distanceText, sizeof(distanceText), "%.1f m", distance);
         glBindTexture(GL_TEXTURE_2D, digits);
         glBindVertexArray(digitVAO);
         for (int i = 0; i < MAX_CHARS && distanceText[i] != '\0'; i++) {
@@ -274,13 +386,136 @@ int main()
             glUniform2f(glGetUniformLocation(basicShader, "uRange"), 1.0f / ATLAS_CHARS, 1.0f);
             glDrawArrays(GL_TRIANGLE_FAN, i * 4, 4);
         }
+    };
+    auto drawStudent = [&]() {
+        glUniform2f(glGetUniformLocation(basicShader, "uCenter"), 0.5f, 0.5f);
+        glUniform2f(glGetUniformLocation(basicShader, "uRange"), 1.0f, 1.0f);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, student);
+        glUniform1i(glGetUniformLocation(basicShader, "uUseCol"), 1);
+        glBindVertexArray(studentVAO);
+        glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+        glUniform1i(glGetUniformLocation(basicShader, "uUseCol"), 0);
+        };
+    while (!glfwWindowShouldClose(window))
+    {
+        double frameStart = glfwGetTime();
+        float dt = (float)(frameStart - lastFrame);
+        lastFrame = frameStart;
+        if (!measureMode) {
+            prevX = mapX;
+            prevY = mapY;
+
+            if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) mapY += panSpeed * dt;
+            if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) mapY -= panSpeed * dt;
+            if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) mapX += panSpeed * dt;
+            if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) mapX -= panSpeed * dt;
+
+
+
+            mapX = max(rS / 2, min(mapX, 1.0f - rS / 2));
+            mapY = max(rT / 2, min(mapY, 1.0f - rT / 2));
+
+            //predjena razdaljina (racuna se posle ogranicenja, pa se ne broji guranje u ivicu)
+            float dxPx = (mapX - prevX) * imgW;
+            float dyPx = (mapY - prevY) * imgH;
+            distance += sqrt(dxPx * dxPx + dyPx * dyPx) * METERS_PER_PIXEL;
+
+
+            glClear(GL_COLOR_BUFFER_BIT);
+            glUseProgram(basicShader);
+
+            //map
+            glUniform2f(glGetUniformLocation(basicShader, "uCenter"), mapX, mapY);
+            glUniform2f(glGetUniformLocation(basicShader, "uRange"), rS, rT);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, mapBcg);
+            glBindVertexArray(VAO);
+            glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+
+            //pin
+            glUniform2f(glGetUniformLocation(basicShader, "uCenter"), 0.5f, 0.5f);
+            glUniform2f(glGetUniformLocation(basicShader, "uRange"), 1.0f, 1.0f);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, pin);
+
+            glBindVertexArray(pinVAO);
+            glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+
+
+            //razdaljina
+            drawDistance(distance);
+
+            //student
+            drawStudent();
+
+            //oznaka rezima hodanja
+            glUniform2f(glGetUniformLocation(basicShader, "uCenter"), 0.5f, 0.5f);
+            glUniform2f(glGetUniformLocation(basicShader, "uRange"), 1.0f, 1.0f);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, walkIcon);
+            glBindVertexArray(iconVAO);
+            glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
 
 
 
 
-        glfwSwapBuffers(window);
-        glfwPollEvents();
+            glfwSwapBuffers(window);
+            glfwPollEvents();
 
+
+            
+        }
+        else {
+         
+
+            glClear(GL_COLOR_BUFFER_BIT);
+            glUseProgram(basicShader);
+
+            //map
+            glUniform2f(glGetUniformLocation(basicShader, "uCenter"), 0.5, 0.5);
+            glUniform2f(glGetUniformLocation(basicShader, "uRange"), 1.0, 1.0);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, mapBcg);
+            glBindVertexArray(VAO);
+            glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+
+            //dots
+            if (dotsChanged) {
+                glBindBuffer(GL_ARRAY_BUFFER, dotVBO);
+                glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(dotVertices), dotVertices);
+                glBindBuffer(GL_ARRAY_BUFFER, lineVBO);
+                glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(dotPos), dotPos);
+                dotsChanged = false;
+            }
+
+            //lines - samo boja, bez teksture (pre tacaka, da tacke budu preko)
+            glUniform1i(glGetUniformLocation(basicShader, "uUseTex"), 0);
+            glUniform1i(glGetUniformLocation(basicShader, "uUseCol"), 1);
+            glVertexAttrib4f(1, 1.0f, 1.0f, 1.0f, 1.0f); // bela
+            glBindVertexArray(lineVAO);
+            glDrawArrays(GL_LINE_STRIP, 0, numOfDots);
+            glUniform1i(glGetUniformLocation(basicShader, "uUseTex"), 1);
+            glUniform1i(glGetUniformLocation(basicShader, "uUseCol"), 0);
+
+            //dot
+            glUniform2f(glGetUniformLocation(basicShader, "uCenter"), 0.5f, 0.5f);
+            glUniform2f(glGetUniformLocation(basicShader, "uRange"), 1.0f, 1.0f);
+            glBindTexture(GL_TEXTURE_2D, dot);
+            glBindVertexArray(dotVAO);
+            for (int i = 0; i < numOfDots; i++) {
+                glDrawArrays(GL_TRIANGLE_FAN, i * 4, 4);
+            }
+
+            //izmerena razdaljina
+            drawDistance(measuredDistance);
+
+            //student
+            drawStudent();
+
+            glfwSwapBuffers(window);
+            glfwPollEvents();
+        }
 
         double target = frameStart + FRAME_TIME;
         while (glfwGetTime() < target) {
@@ -288,9 +523,6 @@ int main()
             if (left > 0.002)
                 std::this_thread::sleep_for(std::chrono::duration<double>(left - 0.002));
         }
-
-
-
         //ispis fps-a
         frameCount++;
         double now = glfwGetTime();
