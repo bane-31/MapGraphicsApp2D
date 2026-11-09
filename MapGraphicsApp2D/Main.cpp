@@ -9,6 +9,14 @@
 #include <chrono>
 #include <thread>
 
+#include <windows.h>
+#include <mmsystem.h>
+#pragma comment(lib, "winmm.lib")
+
+
+
+const double TARGET_FPS = 75.0;
+const double FRAME_TIME = 1.0 / TARGET_FPS;
 
 int endProgram(std::string message) {
     std::cout << message << std::endl;
@@ -43,6 +51,8 @@ void preprocessTexture(unsigned& texture, const char* filepath) {
 
 int main()
 {
+    timeBeginPeriod(1);
+
     glfwInit();
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
@@ -54,8 +64,8 @@ int main()
     GLFWwindow* window = glfwCreateWindow(mode->width, mode->height, "Vezba 4", monitor, NULL);
     if (window == NULL) return endProgram("Prozor nije uspeo da se kreira.");
     glfwMakeContextCurrent(window);
-
     glfwSwapInterval(0);
+
 
     glfwSetKeyCallback(window, keyboardCallback);
 
@@ -67,16 +77,14 @@ int main()
     glUseProgram(basicShader);
     glUniform1i(glGetUniformLocation(basicShader, "uTex0"), 0);
 
-    unsigned int twoLegs;
-    unsigned int fourLegs;
-    unsigned int hat;
-    unsigned int grass;
-    unsigned int mapBcg;
 
+    unsigned int mapBcg;
+    unsigned int pin;
 
     preprocessTexture(mapBcg, "res/map_bcg3.jpg");
+    preprocessTexture(pin, "res/pin.png");
 
-
+    //map
     float vertices[] = {
         //   x      y       s     t
            -1.0f,  1.0f,   0.0f, 0.5f,
@@ -100,13 +108,42 @@ int main()
     glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
     glEnableVertexAttribArray(2);
 
+    ////pin
+
+    float pinVertices[] = {
+        //   x      y       s     t
+           -1.0f,  1.0f,   0.0f, 0.0f,
+           -1.0f, -1.0f,   0.0f, 0.0f,
+            1.0f, -1.0f,   0.5f, 0.0f,
+            1.0f,  1.0f,   0.5f, 0.5f,
+    };
+    unsigned int pinVAO;
+    unsigned int pinVBO;
+    glGenVertexArrays(1, &pinVAO);
+    glGenBuffers(1, &pinVBO);
+
+    glBindVertexArray(pinVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, pinVBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(pinVertices), pinVertices, GL_STATIC_DRAW);
+
+
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+
+    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
+    glEnableVertexAttribArray(2);
+
     glClearColor(0.5f, 0.6f, 1.0f, 1.0f);
 
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
+    double fpsTimer = glfwGetTime();
+    int frameCount = 0;
+
     while (!glfwWindowShouldClose(window))
     {
+        double frameStart = glfwGetTime();
 
         glClear(GL_COLOR_BUFFER_BIT);
         glUseProgram(basicShader);
@@ -121,8 +158,28 @@ int main()
 
         glfwSwapBuffers(window);
         glfwPollEvents();
+
+
+        double target = frameStart + FRAME_TIME;
+        while (glfwGetTime() < target) {
+            double left = target - glfwGetTime();
+            if (left > 0.002)
+                std::this_thread::sleep_for(std::chrono::duration<double>(left - 0.002));
+        }
+
+
+
+        //ispis fps-a
+        frameCount++;
+        double now = glfwGetTime();
+        if (now - fpsTimer >= 1.0) {
+            std::cout << "FPS: " << frameCount << std::endl;
+            frameCount = 0;
+            fpsTimer = now;
+        }
     }
 
+    timeEndPeriod(1);
     glfwTerminate();
     return 0;
 }
