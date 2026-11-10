@@ -15,6 +15,7 @@
 
 #include "stb_image.h"
 #include <cstdio>
+#include <vector>
 
 
 
@@ -36,10 +37,86 @@ const float DOT_HIT_PX = 10.0f;
 const float iconX0 = 0.88f, iconX1 = 0.98f, iconY0 = 0.78f, iconY1 = 0.96f;
 
 
+unsigned char* compassPixels = NULL;
+unsigned char* basePixels = NULL;
+int compassW = 0, compassH = 0;
+std::vector<unsigned char> rotatedPixels;
+GLFWcursor* compassCursor = NULL;
+float lastCursorAngle = 1000.0f;
+const float NEEDLE_ANGLE = 45.0f;
+const float CURSOR_STEP = 2.0f;
+
+void setCompassCursor(GLFWwindow* window, float angleDeg) {
+    float a = angleDeg * (float)M_PI / 180.0f;
+    float c = cos(a), s = sin(a);
+    float cx = compassW / 2.0f, cy = compassH / 2.0f;
+    rotatedPixels.assign(compassW * compassH * 4, 0);
+
+    for (int y = 0; y < compassH; y++) {
+        for (int x = 0; x < compassW; x++) {
+            float u = x + 0.5f - cx, v = cy - (y + 0.5f);
+            float su = u * c + v * s;
+            float sv = -u * s + v * c;
+            float sx = cx + su - 0.5f, sy = cy - sv - 0.5f;
+
+            int x0 = (int)floor(sx), y0 = (int)floor(sy);
+            float fx = sx - x0, fy = sy - y0;
+            float sum[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+            for (int j = 0; j < 2; j++) {
+                for (int i = 0; i < 2; i++) {
+                    int px = x0 + i, py = y0 + j;
+                    if (px < 0 || py < 0 || px >= compassW || py >= compassH) continue;
+                    float w = (i ? fx : 1.0f - fx) * (j ? fy : 1.0f - fy);
+                    const unsigned char* p = &compassPixels[(py * compassW + px) * 4];
+                    float al = p[3] / 255.0f;
+                    sum[0] += p[0] * al * w;
+                    sum[1] += p[1] * al * w;
+                    sum[2] += p[2] * al * w;
+                    sum[3] += p[3] * w;
+                }
+            }
+
+
+            const unsigned char* b = &basePixels[(y * compassW + x) * 4];
+            float na = sum[3] / 255.0f;
+            if (na > 1.0f) na = 1.0f;
+            float ba = b[3] / 255.0f;
+            float outA = na + ba * (1.0f - na);
+
+            unsigned char* o = &rotatedPixels[(y * compassW + x) * 4];
+            if (outA > 0.0f) {
+                for (int k = 0; k < 3; k++) {
+                    float val = (sum[k] + b[k] * ba * (1.0f - na)) / outA;
+                    o[k] = (unsigned char)(val > 255.0f ? 255.0f : val);
+                }
+                o[3] = (unsigned char)(outA * 255.0f);
+            }
+        }
+    }
+
+    GLFWimage image;
+    image.width = compassW;
+    image.height = compassH;
+    image.pixels = rotatedPixels.data();
+
+    GLFWcursor* newCursor = glfwCreateCursor(&image, compassW / 2, compassH / 2);
+    if (newCursor == NULL) return;
+    glfwSetCursor(window, newCursor);
+    if (compassCursor != NULL) glfwDestroyCursor(compassCursor);
+    compassCursor = newCursor;
+    lastCursorAngle = angleDeg;
+}
+
+void cursorPosCallback(GLFWwindow* window, double xpos, double ypos) {
+    if (compassPixels == NULL || basePixels == NULL) return;
+    float target = (float)(atan2(ypos, -xpos) * 180.0 / M_PI);
+    float angle = target - NEEDLE_ANGLE;
+    if (fabs(angle - lastCursorAngle) < CURSOR_STEP) return;
+    setCompassCursor(window, angle);
+}
 void updateMeasuredDistance() {
     measuredDistance = 0.0f;
     for (size_t i = 1; i < dots.size(); i++) {
-        // pixels =  NDC diff / 2 * image dim 
         float dxPx = (dots[i].first - dots[i - 1].first) / 2.0f * imgW;
         float dyPx = (dots[i].second - dots[i - 1].second) / 2.0f * imgH;
         measuredDistance += sqrt(dxPx * dxPx + dyPx * dyPx) * METERS_PER_PIXEL;
@@ -168,6 +245,24 @@ int main()
     unsigned int walkIcon;
     unsigned int rulerIcon;
     unsigned int student;
+
+    int compassComp, baseW, baseH;
+    compassPixels = stbi_load("res/needle_32.png", &compassW, &compassH, &compassComp, 4);
+    basePixels = stbi_load("res/compass_base_32.png", &baseW, &baseH, &compassComp, 4);
+    if (compassPixels == NULL || basePixels == NULL) {
+        std::cout << "Kursor nije ucitan! Putanje: res/needle_32.png, res/compass_base_32.png" << std::endl;
+    }
+    else if (baseW != compassW || baseH != compassH) {
+        std::cout << "Igla i podloga kompasa moraju biti iste velicine!" << std::endl;
+        stbi_image_free(basePixels);
+        basePixels = NULL;
+    }
+    else {
+        double curX, curY;
+        glfwGetCursorPos(window, &curX, &curY);
+        cursorPosCallback(window, curX, curY);
+    }
+    glfwSetCursorPosCallback(window, cursorPosCallback);
 
     preprocessTexture(mapBcg, "res/map_bcg3.jpg");
     preprocessTexture(pin, "res/pin1.png");
