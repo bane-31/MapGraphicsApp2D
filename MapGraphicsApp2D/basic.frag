@@ -5,8 +5,8 @@ in vec2 chTex;
 out vec4 outCol;
 
 uniform sampler2D uTex;
-uniform bool uUseTex; // da li se uzima boja iz teksture
-uniform bool uUseCol; // da li se uzima boja iz temena (rgba)
+uniform bool uUseTex;
+uniform bool uUseCol;
 
 void main()
 {
